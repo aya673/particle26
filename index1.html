@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Kyomu Neko Merge Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #fdfefe; font-family: sans-serif; }
+        #game-container { 
+            position: relative; width: 450px; height: 750px; 
+            margin: 10px auto; border: 8px solid #edeff2; border-radius: 30px; 
+            background: #fff; box-shadow: 0 10px 30px rgba(0,0,0,0.1); overflow: hidden; 
+        }
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; color: #333; z-index: 10; }
+        .score { position: absolute; top: 20px; left: 25px; font-size: 28px; font-weight: bold; }
+        .next-box { 
+            position: absolute; top: 20px; right: 20px; text-align: center; 
+            background: #f8f9fa; padding: 10px; border-radius: 20px; border: 2px solid #eee; width: 90px; 
+        }
+        #game-over {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.9); display: none; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100;
+        }
+        canvas { display: block; }
+        button { padding: 12px 40px; font-size: 20px; cursor: pointer; border-radius: 50px; border: none; background: #333; color: #fff; }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div class="ui-layer">
+            <div class="score">Score: <span id="scoreVal">0</span></div>
+            <div class="next-box">
+                <div style="font-size:12px;opacity:0.5;margin-bottom:5px;">NEXT</div>
+                <canvas id="nextCanvas" width="80" height="80"></canvas>
+            </div>
+        </div>
+        <div id="game-over">
+            <h1 style="color:#333;">GAME OVER</h1>
+            <p>Score: <span id="finalScore">0</span></p>
+            <button onclick="resetGame()">Try Again</button>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const nextCanvas = document.getElementById('nextCanvas');
+        const nextCtx = nextCanvas.getContext('2d');
+        const scoreElement = document.getElementById('scoreVal');
+        
+        canvas.width = 450;
+        canvas.height = 750;
+
+        let score = 0;
+        let cats = [];
+        let particles = [];
+        const mouse = { x: 225 };
+        let canDrop = true;
+        let isGameOver = false;
+        let gameOverTimer = 0;
+
+        const catTypes = [
+            { radius: 25, color: '#ffffff', line: '#333', name: 'white' },
+            { radius: 35, color: '#444444', line: '#222', name: 'black' },
+            { radius: 45, color: '#e0c090', line: '#8b4513', name: 'tabby' },
+            { radius: 60, color: '#999999', line: '#333', name: 'silver' },
+            { radius: 80, color: '#ffffff', line: '#333', name: 'calico' },
+            { radius: 110, color: '#d2691e', line: '#5d2e0a', name: 'brown' }
+        ];
+
+        let currentIdx = 0;
+        let nextIdx = 1;
+
+        window.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const r = catTypes[currentIdx].radius;
+            mouse.x = Math.max(r, Math.min(canvas.width - r, e.clientX - rect.left));
+        });
+
+        window.addEventListener('mousedown', () => {
+            if (!canDrop || isGameOver) return;
+            spawnCat(mouse.x, 100, currentIdx);
+            currentIdx = nextIdx;
+            nextIdx = Math.floor(Math.random() * 3);
+            canDrop = false;
+            setTimeout(() => { canDrop = true; }, 600);
+        });
+
+        function spawnCat(x, y, index) {
+            cats.push({
+                x, y, vx: 0, vy: 5,
+                ...catTypes[index],
+                type: index,
+                dropTime: Date.now()
+            });
+        }
+
+        function drawCatShape(cCtx, x, y, radius, type, alpha = 1) {
+            cCtx.save();
+            cCtx.translate(x, y);
+            cCtx.globalAlpha = alpha;
+            cCtx.lineWidth = 3;
+            cCtx.lineCap = 'round';
+
+            // 体
+            cCtx.fillStyle = type.color;
+            cCtx.strokeStyle = type.line;
+            cCtx.beginPath();
+            cCtx.moveTo(-radius * 0.7, radius * 0.5);
+            cCtx.quadraticCurveTo(-radius * 0.7, radius * 1.4, 0, radius * 1.4);
+            cCtx.quadraticCurveTo(radius * 0.7, radius * 1.4, radius * 0.7, radius * 0.5);
+            cCtx.fill();
+            cCtx.stroke();
+
+            // 耳
+            [-1, 1].forEach(s => {
+                cCtx.beginPath();
+                cCtx.moveTo(s * radius * 0.4, -radius * 0.7);
+                cCtx.lineTo(s * radius * 0.9, -radius * 1.1);
+                cCtx.lineTo(s * radius * 1.0, -radius * 0.3);
+                cCtx.closePath();
+                cCtx.fill();
+                cCtx.stroke();
+            });
+
+            // 顔
+            cCtx.beginPath();
+            cCtx.ellipse(0, 0, radius, radius * 0.85, 0, 0, Math.PI * 2);
+            cCtx.fill();
+            cCtx.stroke();
+
+            // 特殊模様（三毛など）
+            if (type.name === 'calico') {
+                cCtx.fillStyle = '#d2691e';
+                cCtx.beginPath(); cCtx.ellipse(-radius*0.5, -radius*0.4, radius*0.5, radius*0.3, 0.5, 0, 2*Math.PI); cCtx.fill();
+            }
+
+            // 虚無顔
+            cCtx.fillStyle = type.name === 'black' ? '#fff' : '#000';
+            [-0.3, 0.3].forEach(s => {
+                cCtx.beginPath();
+                cCtx.arc(s * radius * 0.4, radius * 0.1, radius * 0.08, 0, Math.PI * 2);
+                cCtx.fill();
+            });
+
+            // ヒゲ
+            cCtx.strokeStyle = type.line;
+            cCtx.lineWidth = 2;
+            [-1, 1].forEach(s => {
+                [0, 0.15].forEach(v => {
+                    cCtx.beginPath();
+                    cCtx.moveTo(s * radius * 0.9, radius * (0.1 + v));
+                    cCtx.lineTo(s * radius * 1.2, radius * (0.1 + v));
+                    cCtx.stroke();
+                });
+            });
+
+            cCtx.restore();
+        }
+
+        function createSparkle(x, y, color) {
+            for (let i = 0; i < 30; i++) {
+                particles.push({
+                    x, y, vx: (Math.random() - 0.5) * 15, vy: (Math.random() - 0.5) * 15,
+                    size: Math.random() * 5 + 2, opacity: 1, color
+                });
+            }
+        }
+
+        function update() {
+            if (isGameOver) return;
+            let overLimit = false;
+
+            for (let i = 0; i < cats.length; i++) {
+                let c = cats[i];
+                c.vy += 0.8; c.x += c.vx; c.y += c.vy;
+
+                if (Date.now() - c.dropTime > 1500 && c.y - c.radius < 180) overLimit = true;
+                if (c.x < c.radius) { c.x = c.radius; c.vx *= -0.4; }
+                if (c.x > canvas.width - c.radius) { c.x = canvas.width - c.radius; c.vx *= -0.4; }
+                if (c.y > canvas.height - c.radius) { c.y = canvas.height - c.radius; c.vy *= -0.3; c.vx *= 0.9; }
+
+                for (let j = i + 1; j < cats.length; j++) {
+                    let c2 = cats[j];
+                    let dx = c2.x - c.x, dy = c2.y - c.y;
+                    let dist = Math.sqrt(dx*dx + dy*dy);
+                    let minDist = c.radius + c2.radius;
+
+                    if (dist < minDist) {
+                        if (c.type === c2.type) {
+                            const mx = (c.x + c2.x) / 2, my = (c.y + c2.y) / 2;
+                            createSparkle(mx, my, c.color);
+                            cats.splice(j, 1); cats.splice(i, 1);
+                            if (c.type < catTypes.length - 1) {
+                                spawnCat(mx, my, c.type + 1);
+                                score += (c.type + 1) * 100;
+                            } else { score += 2000; }
+                            scoreElement.innerText = score;
+                            return;
+                        }
+                        let angle = Math.atan2(dy, dx), overlap = (minDist - dist) * 0.15;
+                        c.vx -= Math.cos(angle) * overlap; c.vy -= Math.sin(angle) * overlap;
+                        c2.vx += Math.cos(angle) * overlap; c2.vy += Math.sin(angle) * overlap;
+                    }
+                }
+            }
+            if (overLimit) {
+                if (++gameOverTimer > 120) { isGameOver = true; document.getElementById('finalScore').innerText = score; document.getElementById('game-over').style.display = 'flex'; }
+            } else { gameOverTimer = 0; }
+            particles.forEach((p, idx) => { p.x += p.vx; p.y += p.vy; p.opacity -= 0.03; if (p.opacity <= 0) particles.splice(idx, 1); });
+        }
+
+        function resetGame() {
+            score = 0; scoreElement.innerText = "0"; cats = []; particles = []; currentIdx = 0; isGameOver = false;
+            document.getElementById('game-over').style.display = 'none';
+        }
+
+        function loop() {
+            update();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
+            drawCatShape(nextCtx, 40, 40, 20, catTypes[nextIdx]);
+
+            ctx.strokeStyle = "rgba(0,0,0,0.05)";
+            ctx.beginPath(); ctx.moveTo(0, 180); ctx.lineTo(canvas.width, 180); ctx.stroke();
+
+            if (canDrop && !isGameOver) drawCatShape(ctx, mouse.x, 100, catTypes[currentIdx].radius, catTypes[currentIdx], 0.5);
+            cats.forEach(c => drawCatShape(ctx, c.x, c.y, c.radius, c));
+            particles.forEach(p => { ctx.save(); ctx.globalAlpha = p.opacity; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill(); ctx.restore(); });
+            requestAnimationFrame(loop);
+        }
+        loop();
+    </script>
+</body>
+</html>
