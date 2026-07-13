@@ -2,235 +2,260 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Kyomu Neko Merge Game</title>
+    <title>ネコパズル - モード選択版</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #fdfefe; font-family: sans-serif; }
-        #game-container { 
-            position: relative; width: 450px; height: 750px; 
-            margin: 10px auto; border: 8px solid #edeff2; border-radius: 30px; 
-            background: #fff; box-shadow: 0 10px 30px rgba(0,0,0,0.1); overflow: hidden; 
-        }
-        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; color: #333; z-index: 10; }
-        .score { position: absolute; top: 20px; left: 25px; font-size: 28px; font-weight: bold; }
-        .next-box { 
-            position: absolute; top: 20px; right: 20px; text-align: center; 
-            background: #f8f9fa; padding: 10px; border-radius: 20px; border: 2px solid #eee; width: 90px; 
-        }
-        #game-over {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255,255,255,0.9); display: none; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 100;
-        }
-        canvas { display: block; }
-        button { padding: 12px 40px; font-size: 20px; cursor: pointer; border-radius: 50px; border: none; background: #333; color: #fff; }
+        body { margin: 0; background: #e0f0ff; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
+        canvas { box-shadow: 0 10px 30px rgba(0,0,0,0.2); border-radius: 8px; }
+        #menu, #result { position: absolute; background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        button { font-size: 18px; padding: 10px 20px; margin: 10px; cursor: pointer; border: none; border-radius: 5px; background: #3498db; color: white; font-weight: bold; }
+        button:hover { background: #2980b9; }
+        #hud { position: absolute; top: 10px; display: flex; gap: 20px; font-size: 20px; font-weight: bold; background: rgba(255,255,255,0.8); padding: 5px 15px; border-radius: 20px; pointer-events: none; }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
-    <div id="game-container">
-        <div class="ui-layer">
-            <div class="score">Score: <span id="scoreVal">0</span></div>
-            <div class="next-box">
-                <div style="font-size:12px;opacity:0.5;margin-bottom:5px;">NEXT</div>
-                <canvas id="nextCanvas" width="80" height="80"></canvas>
-            </div>
-        </div>
-        <div id="game-over">
-            <h1 style="color:#333;">GAME OVER</h1>
-            <p>Score: <span id="finalScore">0</span></p>
-            <button onclick="resetGame()">Try Again</button>
-        </div>
-        <canvas id="gameCanvas"></canvas>
+
+    <div id="hud" class="hidden">
+        <div id="scoreDisplay">スコア: 0</div>
+        <div id="timerDisplay">時間: 0.00秒</div>
+    </div>
+
+    <div id="menu">
+        <h2>ネコパズル モード選択</h2>
+        <button onclick="startGame('endless')">エンドレスモード</button>
+        <button onclick="startGame('ta')">タイムアタック (3000点先取)</button>
+    </div>
+
+    <div id="result" class="hidden">
+        <h2 id="resultTitle">クリア！</h2>
+        <p id="resultText"></p>
+        <button onclick="backToMenu()">メニューに戻る</button>
     </div>
 
     <script>
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
-        const nextCanvas = document.getElementById('nextCanvas');
-        const nextCtx = nextCanvas.getContext('2d');
-        const scoreElement = document.getElementById('scoreVal');
-        
-        canvas.width = 450;
-        canvas.height = 750;
+        const { Engine, Render, Runner, Bodies, Composite, Events, Body } = Matter;
 
-        let score = 0;
-        let cats = [];
-        let particles = [];
-        const mouse = { x: 225 };
-        let canDrop = true;
-        let isGameOver = false;
-        let gameOverTimer = 0;
-
+        const width = 400;
+        const height = 600;
         const catTypes = [
-            { radius: 25, color: '#ffffff', line: '#333', name: 'white' },
-            { radius: 35, color: '#444444', line: '#222', name: 'black' },
-            { radius: 45, color: '#e0c090', line: '#8b4513', name: 'tabby' },
-            { radius: 60, color: '#999999', line: '#333', name: 'silver' },
-            { radius: 80, color: '#ffffff', line: '#333', name: 'calico' },
-            { radius: 110, color: '#d2691e', line: '#5d2e0a', name: 'brown' }
+            { radius: 20, color: "#FFFFFF", score: 10, next: 1 },
+            { radius: 30, color: "#FFEBCD", score: 20, next: 2 },
+            { radius: 45, color: "#FFA500", score: 40, next: 3 },
+            { radius: 60, color: "#A9A9A9", score: 80, next: 4 },
+            { radius: 80, color: "#D2691E", score: 160, next: 5 },
+            { radius: 100, color: "#333333", score: 320, next: null } // 黒猫
         ];
 
-        let currentIdx = 0;
-        let nextIdx = 1;
+        let engine, render, runner;
+        let currentCat = null;
+        let canDrop = true;
+        let score = 0;
+        let gameMode = 'endless';
+        let startTime = 0;
+        let timerInterval = null;
+        let isGameActive = false;
+        const TARGET_SCORE = 3000;
 
-        window.addEventListener('mousemove', (e) => {
-            const rect = canvas.getBoundingClientRect();
-            const r = catTypes[currentIdx].radius;
-            mouse.x = Math.max(r, Math.min(canvas.width - r, e.clientX - rect.left));
-        });
+        function initPhysics() {
+            engine = Engine.create();
+            render = Render.create({
+                element: document.body,
+                engine: engine,
+                options: { width, height, wireframes: false, background: '#f9f9f9' }
+            });
 
-        window.addEventListener('mousedown', () => {
-            if (!canDrop || isGameOver) return;
-            spawnCat(mouse.x, 100, currentIdx);
-            currentIdx = nextIdx;
-            nextIdx = Math.floor(Math.random() * 3);
+            const ground = Bodies.rectangle(width / 2, height + 25, width, 50, { isStatic: true, render: { fillStyle: '#8b4513' } });
+            const leftWall = Bodies.rectangle(-25, height / 2, 50, height, { isStatic: true });
+            const rightWall = Bodies.rectangle(width + 25, height / 2, 50, height, { isStatic: true });
+            Composite.add(engine.world, [ground, leftWall, rightWall]);
+
+            Render.run(render);
+            runner = Runner.create();
+            Runner.run(runner, engine);
+
+            // カスタム描画
+            Events.on(render, 'afterRender', drawCats);
+            // 衝突処理
+            Events.on(engine, "collisionStart", handleCollision);
+        }
+
+        function startGame(mode) {
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('hud').classList.remove('hidden');
+            
+            gameMode = mode;
+            score = 0;
+            isGameActive = true;
+            canDrop = true;
+            document.getElementById('scoreDisplay').innerText = `スコア: ${score}`;
+
+            initPhysics();
+            spawnNext();
+
+            if (gameMode === 'ta') {
+                startTime = performance.now();
+                document.getElementById('timerDisplay').classList.remove('hidden');
+                timerInterval = setInterval(() => {
+                    const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+                    document.getElementById('timerDisplay').innerText = `時間: ${elapsed}秒`;
+                }, 50);
+            } else {
+                document.getElementById('timerDisplay').classList.add('hidden');
+            }
+
+            // 操作イベント登録
+            window.addEventListener("mousemove", onMouseMove);
+            window.addEventListener("mousedown", onMouseDown);
+        }
+
+        function spawnNext() {
+            if (!isGameActive) return;
+            const index = Math.floor(Math.random() * 3);
+            const type = catTypes[index];
+            currentCat = Bodies.circle(width / 2, 50, type.radius, {
+                isStatic: true,
+                plugin: { typeIndex: index },
+                render: { visible: false }
+            });
+            Composite.add(engine.world, currentCat);
+        }
+
+        function onMouseMove(e) {
+            if (currentCat && currentCat.isStatic) {
+                const rect = render.canvas.getBoundingClientRect();
+                const x = Math.max(currentCat.circleRadius, Math.min(width - currentCat.circleRadius, e.clientX - rect.left));
+                Body.setPosition(currentCat, { x, y: 50 });
+            }
+        }
+
+        function onMouseDown() {
+            if (!canDrop || !currentCat || !isGameActive) return;
             canDrop = false;
-            setTimeout(() => { canDrop = true; }, 600);
-        });
-
-        function spawnCat(x, y, index) {
-            cats.push({
-                x, y, vx: 0, vy: 5,
-                ...catTypes[index],
-                type: index,
-                dropTime: Date.now()
-            });
+            Body.setStatic(currentCat, false);
+            currentCat = null;
+            setTimeout(() => { spawnNext(); canDrop = true; }, 800);
         }
 
-        function drawCatShape(cCtx, x, y, radius, type, alpha = 1) {
-            cCtx.save();
-            cCtx.translate(x, y);
-            cCtx.globalAlpha = alpha;
-            cCtx.lineWidth = 3;
-            cCtx.lineCap = 'round';
+        function handleCollision(event) {
+            event.pairs.forEach((pair) => {
+                const { bodyA, bodyB } = pair;
+                const idxA = bodyA.plugin.typeIndex;
+                const idxB = bodyB.plugin.typeIndex;
 
-            // 体
-            cCtx.fillStyle = type.color;
-            cCtx.strokeStyle = type.line;
-            cCtx.beginPath();
-            cCtx.moveTo(-radius * 0.7, radius * 0.5);
-            cCtx.quadraticCurveTo(-radius * 0.7, radius * 1.4, 0, radius * 1.4);
-            cCtx.quadraticCurveTo(radius * 0.7, radius * 1.4, radius * 0.7, radius * 0.5);
-            cCtx.fill();
-            cCtx.stroke();
+                if (idxA !== undefined && idxA === idxB) {
+                    const midX = (bodyA.position.x + bodyB.position.x) / 2;
+                    const midY = (bodyA.position.y + bodyB.position.y) / 2;
+                    
+                    Composite.remove(engine.world, [bodyA, bodyB]);
+                    score += catTypes[idxA].score;
+                    document.getElementById('scoreDisplay').innerText = `スコア: ${score}`;
 
-            // 耳
-            [-1, 1].forEach(s => {
-                cCtx.beginPath();
-                cCtx.moveTo(s * radius * 0.4, -radius * 0.7);
-                cCtx.lineTo(s * radius * 0.9, -radius * 1.1);
-                cCtx.lineTo(s * radius * 1.0, -radius * 0.3);
-                cCtx.closePath();
-                cCtx.fill();
-                cCtx.stroke();
-            });
+                    if (catTypes[idxA].next !== null) {
+                        // 次のネコへ進化
+                        const newIdx = catTypes[idxA].next;
+                        const newCat = Bodies.circle(midX, midY, catTypes[newIdx].radius, {
+                            plugin: { typeIndex: newIdx },
+                            render: { visible: false }
+                        });
+                        Composite.add(engine.world, newCat);
+                    } else {
+                        // 【改善】黒猫同士が合体したら消滅して高得点
+                        score += 500;
+                        document.getElementById('scoreDisplay').innerText = `スコア: ${score}`;
+                    }
 
-            // 顔
-            cCtx.beginPath();
-            cCtx.ellipse(0, 0, radius, radius * 0.85, 0, 0, Math.PI * 2);
-            cCtx.fill();
-            cCtx.stroke();
-
-            // 特殊模様（三毛など）
-            if (type.name === 'calico') {
-                cCtx.fillStyle = '#d2691e';
-                cCtx.beginPath(); cCtx.ellipse(-radius*0.5, -radius*0.4, radius*0.5, radius*0.3, 0.5, 0, 2*Math.PI); cCtx.fill();
-            }
-
-            // 虚無顔
-            cCtx.fillStyle = type.name === 'black' ? '#fff' : '#000';
-            [-0.3, 0.3].forEach(s => {
-                cCtx.beginPath();
-                cCtx.arc(s * radius * 0.4, radius * 0.1, radius * 0.08, 0, Math.PI * 2);
-                cCtx.fill();
-            });
-
-            // ヒゲ
-            cCtx.strokeStyle = type.line;
-            cCtx.lineWidth = 2;
-            [-1, 1].forEach(s => {
-                [0, 0.15].forEach(v => {
-                    cCtx.beginPath();
-                    cCtx.moveTo(s * radius * 0.9, radius * (0.1 + v));
-                    cCtx.lineTo(s * radius * 1.2, radius * (0.1 + v));
-                    cCtx.stroke();
-                });
-            });
-
-            cCtx.restore();
-        }
-
-        function createSparkle(x, y, color) {
-            for (let i = 0; i < 30; i++) {
-                particles.push({
-                    x, y, vx: (Math.random() - 0.5) * 15, vy: (Math.random() - 0.5) * 15,
-                    size: Math.random() * 5 + 2, opacity: 1, color
-                });
-            }
-        }
-
-        function update() {
-            if (isGameOver) return;
-            let overLimit = false;
-
-            for (let i = 0; i < cats.length; i++) {
-                let c = cats[i];
-                c.vy += 0.8; c.x += c.vx; c.y += c.vy;
-
-                if (Date.now() - c.dropTime > 1500 && c.y - c.radius < 180) overLimit = true;
-                if (c.x < c.radius) { c.x = c.radius; c.vx *= -0.4; }
-                if (c.x > canvas.width - c.radius) { c.x = canvas.width - c.radius; c.vx *= -0.4; }
-                if (c.y > canvas.height - c.radius) { c.y = canvas.height - c.radius; c.vy *= -0.3; c.vx *= 0.9; }
-
-                for (let j = i + 1; j < cats.length; j++) {
-                    let c2 = cats[j];
-                    let dx = c2.x - c.x, dy = c2.y - c.y;
-                    let dist = Math.sqrt(dx*dx + dy*dy);
-                    let minDist = c.radius + c2.radius;
-
-                    if (dist < minDist) {
-                        if (c.type === c2.type) {
-                            const mx = (c.x + c2.x) / 2, my = (c.y + c2.y) / 2;
-                            createSparkle(mx, my, c.color);
-                            cats.splice(j, 1); cats.splice(i, 1);
-                            if (c.type < catTypes.length - 1) {
-                                spawnCat(mx, my, c.type + 1);
-                                score += (c.type + 1) * 100;
-                            } else { score += 2000; }
-                            scoreElement.innerText = score;
-                            return;
-                        }
-                        let angle = Math.atan2(dy, dx), overlap = (minDist - dist) * 0.15;
-                        c.vx -= Math.cos(angle) * overlap; c.vy -= Math.sin(angle) * overlap;
-                        c2.vx += Math.cos(angle) * overlap; c2.vy += Math.sin(angle) * overlap;
+                    // タイムアタックのクリア判定
+                    if (gameMode === 'ta' && score >= TARGET_SCORE) {
+                        endGame(true);
                     }
                 }
+            });
+        }
+
+        function drawCats() {
+            const context = render.context;
+            const bodies = Composite.allBodies(engine.world);
+
+            bodies.forEach(body => {
+                if (body.plugin.typeIndex !== undefined) {
+                    const { x, y } = body.position;
+                    const r = body.circleRadius;
+                    const angle = body.angle;
+                    const color = catTypes[body.plugin.typeIndex].color;
+
+                    context.save();
+                    context.translate(x, y);
+                    context.rotate(angle);
+
+                    // 耳
+                    context.fillStyle = color;
+                    context.strokeStyle = "#000";
+                    context.lineWidth = 2;
+                    [-0.8, 0.2].forEach(sign => {
+                        context.beginPath();
+                        context.moveTo(r * sign, -r * 0.2);
+                        context.lineTo(r * (sign + (sign < 0 ? -0.1 : 0.7)), -r * 1.1);
+                        context.lineTo(r * (sign + (sign < 0 ? 0.6 : -0.2)), -r * 0.8);
+                        context.fill(); context.stroke();
+                    });
+
+                    // 顔
+                    context.beginPath();
+                    context.arc(0, 0, r, 0, Math.PI * 2);
+                    context.fill(); context.stroke();
+
+                    // 目・鼻
+                    context.fillStyle = body.plugin.typeIndex === 5 ? "#FFF" : "#000";
+                    context.beginPath();
+                    context.arc(-r * 0.3, -r * 0.1, r * 0.1, 0, Math.PI * 2);
+                    context.arc(r * 0.3, -r * 0.1, r * 0.1, 0, Math.PI * 2);
+                    context.fill();
+                    context.fillStyle = "#FFC0CB";
+                    context.beginPath();
+                    context.arc(0, r * 0.1, r * 0.08, 0, Math.PI * 2);
+                    context.fill();
+
+                    context.restore();
+                }
+            });
+        }
+
+        function endGame(isClear) {
+            isGameActive = false;
+            clearInterval(timerInterval);
+            
+            window.removeEventListener("mousemove", onMouseMove);
+            window.removeEventListener("mousedown", onMouseDown);
+
+            const resultDiv = document.getElementById('result');
+            const resultTitle = document.getElementById('resultTitle');
+            const resultText = document.getElementById('resultText');
+
+            if (gameMode === 'ta' && isClear) {
+                const finalTime = ((performance.now() - startTime) / 1000).toFixed(2);
+                resultTitle.innerText = "タイムアタッククリア！";
+                resultText.innerText = `${TARGET_SCORE}点達成タイム: ${finalTime}秒`;
+            } else {
+                resultTitle.innerText = "ゲーム終了";
+                resultText.innerText = `最終スコア: ${score}点`;
             }
-            if (overLimit) {
-                if (++gameOverTimer > 120) { isGameOver = true; document.getElementById('finalScore').innerText = score; document.getElementById('game-over').style.display = 'flex'; }
-            } else { gameOverTimer = 0; }
-            particles.forEach((p, idx) => { p.x += p.vx; p.y += p.vy; p.opacity -= 0.03; if (p.opacity <= 0) particles.splice(idx, 1); });
+
+            resultDiv.classList.remove('hidden');
         }
 
-        function resetGame() {
-            score = 0; scoreElement.innerText = "0"; cats = []; particles = []; currentIdx = 0; isGameOver = false;
-            document.getElementById('game-over').style.display = 'none';
+        function backToMenu() {
+            document.getElementById('result').classList.add('hidden');
+            document.getElementById('hud').classList.add('hidden');
+            document.getElementById('menu').classList.remove('hidden');
+            
+            // 物理エンジンのクリーンアップ
+            if (render) {
+                Render.stop(render);
+                render.canvas.remove();
+            }
+            if (runner) Runner.stop(runner);
         }
-
-        function loop() {
-            update();
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
-            drawCatShape(nextCtx, 40, 40, 20, catTypes[nextIdx]);
-
-            ctx.strokeStyle = "rgba(0,0,0,0.05)";
-            ctx.beginPath(); ctx.moveTo(0, 180); ctx.lineTo(canvas.width, 180); ctx.stroke();
-
-            if (canDrop && !isGameOver) drawCatShape(ctx, mouse.x, 100, catTypes[currentIdx].radius, catTypes[currentIdx], 0.5);
-            cats.forEach(c => drawCatShape(ctx, c.x, c.y, c.radius, c));
-            particles.forEach(p => { ctx.save(); ctx.globalAlpha = p.opacity; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill(); ctx.restore(); });
-            requestAnimationFrame(loop);
-        }
-        loop();
     </script>
 </body>
 </html>
